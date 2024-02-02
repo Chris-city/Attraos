@@ -25,7 +25,7 @@ if __name__ == '__main__':
     parser.add_argument('--is_training', type=int, default=1, help='status')
     parser.add_argument('--search', type=int, default=0)
     parser.add_argument('--model_id', type=str, default='test', help='model id')
-    parser.add_argument('--model', type=str, default='PatchTST',
+    parser.add_argument('--model', type=str, default='FiLM',
                         help='model name, options: [Autoformer, Transformer, TimesNet]')
 
     # data loader
@@ -40,7 +40,7 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='location of model checkpoints')
 
     # forecasting task
-    parser.add_argument('--seq_len', type=int, default=356, help='input sequence length')
+    parser.add_argument('--seq_len', type=int, default=336, help='input sequence length')
     parser.add_argument('--label_len', type=int, default=96, help='start token length')
     parser.add_argument('--pred_len', type=int, default=96, help='prediction sequence length')
     parser.add_argument('--seasonal_patterns', type=str, default='Monthly', help='subset for M4')
@@ -71,30 +71,24 @@ if __name__ == '__main__':
     parser.add_argument('--embed', type=str, default='timeF',
                         help='time features encoding, options:[timeF, fixed, learned]')
     parser.add_argument('--activation', type=str, default='gelu', help='activation')
-    parser.add_argument('--output_attention', action='store_true', help='whether to output attention in ecoder')
+    parser.add_argument('--output_attention', default=False)
 
     # Attraos
-    parser.add_argument('--PSR_dim', type=int, default=8)
+    parser.add_argument('--PSR_dim', type=int, default=4)
     parser.add_argument('--M_PSR_dim', type=int, default=32)
-    parser.add_argument('--PSR_delay', type=int, default=1)
-    parser.add_argument('--PSR_type', type=str, default='merged_seq')
+    parser.add_argument('--PSR_delay', type=int, default=12)
+    parser.add_argument('--PSR_type', type=str, default='pass')
     parser.add_argument('--level', type=int, default=3, help='MRPP transform level')
-    parser.add_argument('--A_number', default=[4,4,4,4], help='A_number in each level')
-    parser.add_argument('--A_num_type', default='fixed')
-    parser.add_argument('--denorm', default=False, help='if use denorm at begin and end of the code')
-    parser.add_argument('--interaction', default='attn_sep', help='how to evolute the coef')
-    parser.add_argument('--time_mapping', default=False)
-    parser.add_argument('--Hop_dim', default=128)
+    parser.add_argument('--poly_order', default=256)
+    
+    # FiLM
+    parser.add_argument('--modes1', type=int, default=64, help='modes to be 64')
+    parser.add_argument('--L', type=int, default=3, help='ignore level')
+    parser.add_argument('--base',type=str,default='legendre',help='mwt base')
+    parser.add_argument('--cross_activation',type=str,default='tanh',help='mwt cross atention activation function tanh or softmax')
+    parser.add_argument('--mode_type',type=int,default=0)
+    parser.add_argument('--version', type=int, default=0, help='compression')
 
-
-    # CARD
-    parser.add_argument('--patch_len', type=int, default=8, help='segment length')
-    parser.add_argument('--stride', type=int, default=8, help='stride')
-    parser.add_argument('--momentum', type=float, default=0.1, help='momentum')
-    parser.add_argument('--dp_rank', type=int, default=8)
-    parser.add_argument('--alpha', type=int, default=0.1)
-    parser.add_argument('--attn_version', type=str, default='v1')
-    parser.add_argument('--adpconv', type=str, default='1d')
 
     # optimization
     parser.add_argument('--num_workers', type=int, default=10, help='data loader num workers')
@@ -111,6 +105,10 @@ if __name__ == '__main__':
     # GPU
     parser.add_argument('--use_gpu', type=bool, default=True, help='use gpu')
     parser.add_argument('--gpu', type=int, default=0, help='gpu')
+    """
+    0 --> 1
+    4 --> 9
+    """
     parser.add_argument('--use_multi_gpu', action='store_true', help='use multiple gpus', default=False)
     parser.add_argument('--devices', type=str, default='0,1,2,3', help='device ids of multile gpus')
 
