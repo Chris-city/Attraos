@@ -14,6 +14,11 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 class Model(nn.Module):
 
+    """
+    when L=0, PSR_type=pass
+    Attraos will become FiLM without MOE.
+    """
+
     def __init__(self, configs):
         super(Model, self).__init__()
         self.task_name = configs.task_name
@@ -25,6 +30,7 @@ class Model(nn.Module):
         self.pred_len = configs.pred_len
         self.level = 3
         self.modes = configs.modes
+        self.order = configs.order
         if configs.PSR_type == "merged" or configs.PSR_type == "merged_seq":
             self.MOE_dim = nn.Linear(
                 configs.PSR_dim * configs.enc_in, configs.M_PSR_dim
@@ -68,24 +74,24 @@ class Model(nn.Module):
             m = mc
             List_ms += [self.K(ms)]
         # last mc
-        mc = self.K(mc)
+        m = self.K(m)
 
         # back projection:
         for i in range(self.level - 1, -1, -1):
-            b, n, d, k = mc.shape  # [BC, T, D, k]
-            m = torch.cat((mc, List_ms[i]), -1)
+            b, n, d, k = m.shape  # [BC, T, D, k]
+            m = torch.cat((m, List_ms[i]), -1)
             ml = torch.matmul(m, self.W_up_0)
             mr = torch.matmul(m, self.W_up_1)
             m = torch.zeros(b, n * 2, d, k, device=mc.device)
             m[..., ::2, :, :] = ml
             m[..., 1::2, :, :] = mr
-            mc = m  # [BC, T, D, k]
+            # mc = m  # [BC, T, D, k]
 
         if self.PSR_enc_len >= self.PSR_dec_len:
             m = m[:, self.PSR_dec_len - 1, :, :]  # [BC, D, k]
         else:
             m = m[:, -1, :, :]
-        dec_PSR = dec_PSR @ (self.MDMU.win0.C[-self.PSR_dec_len:, :].T)  # [BC, D, H]
+        dec_PSR = m @ (self.MDMU.win0.C[-self.PSR_dec_len :, :].T)  # [BC, D, H]
         dec_out = dec_PSR.permute(0, 2, 1)
 
         dec_out = inverse_PSR(
@@ -99,19 +105,21 @@ class Model(nn.Module):
 
     def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
         if (
-                self.task_name == "long_term_forecast"
-                or self.task_name == "short_term_forecast"
+            self.task_name == "long_term_forecast"
+            or self.task_name == "short_term_forecast"
         ):
             dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec)
-            return dec_out[:, -self.pred_len:, :]  # [B, L, D]
+            return dec_out[:, -self.pred_len :, :]  # [B, L, D]
         return None
 
 
 def PSR(input_data, embedding_dim, delay, mode="indep"):
     batch_size, seq_length, input_channels = input_data.shape
 
-    if mode == 'pass':
-        return input_data.permute(0, 2, 1).reshape(batch_size * input_channels, seq_length, 1)
+    if mode == "pass":
+        return input_data.permute(0, 2, 1).reshape(
+            batch_size * input_channels, seq_length, 1
+        )
 
     device = input_data.device
     len_embedded = seq_length - (embedding_dim - 1) * delay
@@ -138,10 +146,12 @@ def PSR(input_data, embedding_dim, delay, mode="indep"):
 
 
 def inverse_PSR(
-        embedded_data, embedding_dim, delay, batch_size, input_channels, mode="merged_seq"
+    embedded_data, embedding_dim, delay, batch_size, input_channels, mode="merged_seq"
 ):
-    if mode == 'pass':
-        return input_data.permute(0, 2, 1).reshape(batch_size * input_channels, seq_length, 1)
+    if mode == "pass":
+        return input_data.permute(0, 2, 1).reshape(
+            batch_size * input_channels, seq_length, 1
+        )
     device = embedded_data.device
     len_embedded = embedded_data.shape[1]
     seq_length = len_embedded + (embedding_dim - 1) * delay
@@ -171,6 +181,7 @@ def inverse_PSR(
 
 
 if __name__ == "__main__":
+
     class Configs(object):
         seq_len = 336
         pred_len = 96
@@ -192,7 +203,6 @@ if __name__ == "__main__":
         task_name = "long_term_forecast"
         time_mapping = False
 
-
     configs = Configs()
     # model = Model(configs).to(device)
     model = Model(configs)
@@ -200,10 +210,8 @@ if __name__ == "__main__":
     enc = torch.randn([16, configs.seq_len, configs.enc_in])
     out = model.forward(enc, None, None, None)
 
-
     def count_parameters(model):
         return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
 
     print("model size", count_parameters(model) / (1024 * 1024))
     print("input shape", enc.shape)
