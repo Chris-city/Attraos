@@ -21,6 +21,7 @@ class Model(nn.Module):
 
     def __init__(self, configs):
         super(Model, self).__init__()
+        
         self.task_name = configs.task_name
         self.PSR_dim = configs.PSR_dim
         self.PSR_type = configs.PSR_type
@@ -28,7 +29,7 @@ class Model(nn.Module):
         self.PSR_enc_len = configs.seq_len - (configs.PSR_dim - 1) * configs.PSR_delay
         self.PSR_dec_len = configs.pred_len - (configs.PSR_dim - 1) * configs.PSR_delay
         self.pred_len = configs.pred_len
-        self.level = 3
+        self.level = configs.level
         self.modes = configs.modes
         self.order = configs.order
         if configs.PSR_type == "merged" or configs.PSR_type == "merged_seq":
@@ -40,16 +41,18 @@ class Model(nn.Module):
         self.MDMU = MDMU(
             level=3,
             k=self.order,
-            modes=configs.modes1,
+            modes=configs.modes,
             base="learned_1",
             length=self.PSR_enc_len,
+            pred=self.PSR_dec_len
         )
         self.K = sparseKernelFT1d(k=self.order, alpha=self.modes, c=self.PSR_dim)
+        self.if_patch = configs.Attraos_patch
 
     def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
         means = x_enc.mean(1, keepdim=True).detach()
         x_enc = x_enc - means
-        stdev = torch.sqrt(torch.var(x_enc, dim=1, keepdim=True, unbiased=False) + 1e-5)
+        stdev = torch.sqrt(torch.var(x_enc, dim=1, keepdim=True, unbiased=False)+ 1e-5).detach() 
         x_enc /= stdev
 
         B, T, C = x_enc.shape
@@ -80,8 +83,8 @@ class Model(nn.Module):
         for i in range(self.level - 1, -1, -1):
             b, n, d, k = m.shape  # [BC, T, D, k]
             m = torch.cat((m, List_ms[i]), -1)
-            ml = torch.matmul(m, self.W_up_0)
-            mr = torch.matmul(m, self.W_up_1)
+            ml = torch.matmul(m, self.MDMU.W_up_0)
+            mr = torch.matmul(m, self.MDMU.W_up_1)
             m = torch.zeros(b, n * 2, d, k, device=mc.device)
             m[..., ::2, :, :] = ml
             m[..., 1::2, :, :] = mr
@@ -91,7 +94,7 @@ class Model(nn.Module):
             m = m[:, self.PSR_dec_len - 1, :, :]  # [BC, D, k]
         else:
             m = m[:, -1, :, :]
-        dec_PSR = m @ (self.MDMU.win0.C[-self.PSR_dec_len :, :].T)  # [BC, D, H]
+        dec_PSR = m @ self.MDMU.win0.C  # [BC, D, H]
         dec_out = dec_PSR.permute(0, 2, 1)
 
         dec_out = inverse_PSR(
@@ -99,8 +102,8 @@ class Model(nn.Module):
         )
 
         # De-Normalization from Non-stationary Transformer
-        dec_out = dec_out * (stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
-        dec_out = dec_out + (means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
+        dec_out = dec_out * stdev
+        dec_out = dec_out + means
         return dec_out
 
     def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
