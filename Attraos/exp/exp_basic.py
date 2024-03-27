@@ -1,8 +1,7 @@
 import os
 import torch
 from models import Autoformer, Transformer, TimesNet, Nonstationary_Transformer, DLinear, FEDformer, \
-    Informer, LightTS, Reformer, ETSformer, Pyraformer, PatchTST, MICN, Crossformer, Client, Linear, TDformer, CIformer, \
-    CARD, Cabe
+    Informer, LightTS, Reformer, ETSformer, Pyraformer, PatchTST, MICN, Crossformer, Client, Linear, Mamba4TS_AR, Mamba4TS_Map, Attraos, FiLM, Attraos_patch
 
 
 class Exp_Basic(object):
@@ -24,11 +23,12 @@ class Exp_Basic(object):
             'MICN': MICN,
             'Crossformer': Crossformer,
             'Client': Client,
-            'Linear':Linear,
-            'TDformer':TDformer,
-            'CIformer': CIformer,
-            'CARD': CARD,
-            'Cabe': Cabe,
+            'Linear': Linear,
+            'Mamba4TS_Map': Mamba4TS_Map,
+            'Mamba4TS_AR': Mamba4TS_AR,
+            'Attraos': Attraos,
+            'FiLM': FiLM,
+            'Attraos_patch': Attraos_patch
         }
         self.device = self._acquire_device()
         self.model = self._build_model().to(self.device)
