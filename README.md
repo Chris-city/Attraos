@@ -1,5 +1,5 @@
 # Attraos
 
 
-pseudocode
+## pseudocode
 ![image](https://github.com/Chris-city/Attraos/blob/main/pescode.png)
