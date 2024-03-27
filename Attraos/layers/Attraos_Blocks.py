@@ -17,7 +17,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 class HiPPO_LegT_Fast(nn.Module):
-    def __init__(self, N, dt=1.0, discretization="bilinear"):
+    def __init__(self, N, dt=1.0, discretization="bilinear", pred=96):
         """
         N: the order of the HiPPO projection
         dt: discretization step size - should be roughly inverse to the length of the sequence
@@ -40,12 +40,11 @@ class HiPPO_LegT_Fast(nn.Module):
         self.B = torch.Tensor(B).to(device)
         self.B = nn.Parameter(self.B)
         # self.B = nn.Parameter(torch.randn(N)* 1e-2)
-
-        vals = np.arange(0.0, 1.0, dt)
-        self.eval_matrix = torch.Tensor(
-            ss.eval_legendre(np.arange(N)[:, None], 1 - 2 * vals).T
+        vals = np.arange(0.0, 1.0, min(dt,1/pred))
+        eval_matrix = torch.Tensor(
+            ss.eval_legendre(np.arange(N)[:, None], - 2 * vals + 1).T
         ).to(device)
-        self.C = nn.Parameter(self.eval_matrix)
+        self.C = nn.Parameter(eval_matrix[-pred :, :].T)
         # self.eval_matrix = nn.Parameter(torch.randn(max_len, N)* 1e-2)
 
     def forward(self, inputs, fast=False):  # torch.Size([128, 1, 1]) -
@@ -116,7 +115,7 @@ class sparseKernelFT1d(nn.Module):
 
 class MDMU(nn.Module):
     def __init__(
-        self, level=3, k=32, phase_dim=1, modes=64, base="legendre", length=336
+        self, level=3, k=32, phase_dim=1, modes=64, base="legendre", length=336, pred=96
     ):
         super().__init__()
 
@@ -176,7 +175,7 @@ class MDMU(nn.Module):
         self.register_buffer("W_down_s", torch.cat((G0.T, G1.T)))
         self.register_buffer("W_up_0", torch.cat((H0r, G0r)))
         self.register_buffer("W_up_1", torch.cat((H1r, G1r)))
-        self.win0 = HiPPO_LegT_Fast(N=k, dt=1.0 / length)
+        self.win0 = HiPPO_LegT_Fast(N=k, dt=1.0 / length, pred=pred)
 
     def forward(self, x):
         pass
