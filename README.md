@@ -9,4 +9,8 @@
 ![image](https://github.com/Chris-city/Attraos/blob/main/pred.png)
 
 
+## Complexity
+![image](https://github.com/Chris-city/Attraos/blob/main/speed.png)
+
+
 
