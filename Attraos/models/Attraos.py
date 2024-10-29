@@ -9,7 +9,8 @@ import torch.fft
 import torch.nn as nn
 import torch.nn.functional as F
 
-from utils.pscan import pscan
+from utils.pscan import pscan_H
+from utils.pscan_ori import pscan
 from einops import rearrange
 
 class Model(nn.Module):
@@ -49,16 +50,16 @@ class Model(nn.Module):
         stdev = torch.sqrt(torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5).detach()
         x /= stdev
 
-        enc_PSR = PSR(x, self.PSR_dim, self.PSR_delay, self.PSR_type)  # [BC, T, D] [32*7, 96, 1]
+        enc_PSR = PSR(x, self.PSR_dim, self.PSR_delay, self.PSR_type)  # [BC, L, D] 
 
         pad_tuple = (0, 0, self.pad_len, 0, 0, 0)
         enc_PSR = F.pad(enc_PSR, pad_tuple, "constant", 0)
 
-        enc_PSR = enc_PSR.unfold(dimension=-2, size=self.patch_len, step=self.patch_len) # [BC, L, D, len]
-        enc_PSR = enc_PSR.reshape(B*C, -1, self.PSR_dim*self.patch_len) # [BC, L, D*len]
+        enc_PSR = enc_PSR.unfold(dimension=-2, size=self.patch_len, step=self.patch_len) # [BC, P, D, len]
+        enc_PSR = enc_PSR.reshape(B*C, -1, self.PSR_dim*self.patch_len) # [BC, P, D*len]
 
         for layer in self.layers:
-            enc_PSR = layer(enc_PSR)  # [BC, L, D*len]
+            enc_PSR = layer(enc_PSR)  # [BC, P, D*len]
 
         enc_PSR = self.out_layer(enc_PSR.reshape(B*C, -1))
         y = rearrange(enc_PSR, '(b m) l -> b l m', b=B)
@@ -116,9 +117,12 @@ class MDMU(nn.Module):
         A = torch.ones(config.d_inner, config.d_state, dtype=torch.float32)
         self.A_log = nn.Parameter(torch.log(A)) 
         self.D = nn.Parameter(torch.ones(config.d_inner))
-        self.K = sparseKernelFT1d(k=config.d_state, alpha=config.modes)
-        # self.H_proj = nn.Linear(
-        #     config.d_inner, config.d_state, bias=False)
+        if config.FFT_evolve:
+            self.K = sparseKernelFT1d(k=config.d_state, modes=min(16, (config.seq_len//config.patch_len) // 2 + 1))
+        else:
+            self.K = nn.Identity()
+        self.H_proj = nn.Linear(
+            config.d_inner, config.d_state, bias=False)
 
     def forward(self, x):
         # x : (B, L, D)
@@ -130,36 +134,37 @@ class MDMU(nn.Module):
         D = self.D.float()
         A = -torch.exp(self.A_log.float())  # (ED, N)
         deltaBC = self.x_proj(x)  # (B, L, dt_rank+N)
-        # H = self.H_proj(x) # (B, L, N)
+        H = self.H_proj(x) # (B, L, N)
         delta, B, C = torch.split(
             deltaBC,
             [self.config.dt_rank, self.config.d_state, self.config.d_state],
             dim=-1,
         )  # (B, L, dt_rank), (B, L, N), (B, L, N)
         delta = F.softplus(self.dt_proj(delta))  # (B, L, ED)
-        y = self.Piecewise_scan(x, delta, A, B, C, D)
+        # y = self.Piecewise_scan(x, delta, A, B, C, D)
+        y = self.Piecewise_scan(x, delta, A, B, C, D, H)
         return y
 
-    def Piecewise_scan(self, x, delta, A, B, C, D):
-        # x : (B, L, ED)
-        # Δ : (B, L, ED)
-        # A : (ED, N)
+    def Piecewise_scan(self, x, delta, A, B, C, D, H):
+        # x : (B, L, D)
+        # Δ : (B, L, D)
+        # A : (D, N)
         # B : (B, L, N)
         # C : (B, L, N)
-        # D : (ED)
-        # y : (B, L, ED)
+        # D : (D)
+        # y : (B, L, D)
 
-        deltaA = torch.exp(delta.unsqueeze(-1) * A)  # (B, L, ED, N)
-        deltaB = delta.unsqueeze(-1) * B.unsqueeze(2)  # (B, L, ED, N)
-        # deltaH = delta.unsqueeze(-1) * H.unsqueeze(2)  # (B, L, ED, N)
-        BX = deltaB * (x.unsqueeze(-1))  # (B, L, ED, N)
-        hs = pscan(deltaA, BX)
+        deltaA = torch.exp(delta.unsqueeze(-1) * A)  # (B, L, D, N)
+        deltaB = delta.unsqueeze(-1) * B.unsqueeze(2)  # (B, L, D, N)
+        deltaH = delta.unsqueeze(-1) * H.unsqueeze(2)  # (B, L, D, N)
+        BX = deltaB * (x.unsqueeze(-1))  # (B, L, D, N)
+        hs = pscan_H(deltaA, BX, deltaH) # (B, L, D, N) 
 
-        hs = self.K(hs)
+        hs = self.K(hs.permute(0, 2, 1, 3)).permute(0, 2, 1, 3)
 
         y = (hs @ C.unsqueeze(-1)).squeeze(
             3
-        )  # (B, L, ED, N) @ (B, L, N, 1) -> (B, L, ED, 1)
+        )  # (B, L, D, N) @ (B, L, N, 1) -> (B, L, D, 1)
 
         y = torch.real(y) + D * x
         return y
@@ -173,11 +178,10 @@ def compl_mul1d(x, weights):
 class sparseKernelFT1d(nn.Module):
     def __init__(self, k, modes):
         super(sparseKernelFT1d, self).__init__()
-
-        self.modes1 = modes
+        self.modes = modes
         self.scale = 1 / (k * k)
         self.weights1 = nn.Parameter(
-            self.scale * torch.rand(k, k, self.modes1, dtype=torch.cfloat)
+            self.scale * torch.rand(k, k, modes, dtype=torch.cfloat)
         )
         self.weights1.requires_grad = True
 
@@ -186,9 +190,9 @@ class sparseKernelFT1d(nn.Module):
         x = x.permute(0, 1, 3, 2) # (B, D, k, N)
         x_fft = torch.fft.rfft(x)
         # Multiply relevant Fourier modes
-        l = min(self.modes1, N // 2 + 1)
+        l = min(self.modes, N // 2 + 1)
         out_ft = torch.zeros(B, D, k, N // 2 + 1, device=x.device, dtype=torch.cfloat)
-        out_ft[:, :, :, :l] = torch.einsum("bdix,iox->bdox", x_fft[:, :, :, :l], self.weights1[:, :, :, :l])
+        out_ft[:, :, :, :l] = torch.einsum("bdix,iox->bdox", x_fft[:, :, :, :l], self.weights1[:, :, :l])
         # Return to physical space
         x = torch.fft.irfft(out_ft, n=N) # (B, D, k, N)
         x = x.permute(0, 1, 3, 2)
